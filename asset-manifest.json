@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.css": "/Hodoal/static/css/main.d971ff2f.css",
-    "main.js": "/Hodoal/static/js/main.b0ae3f6c.js",
-    "static/js/453.85d54611.chunk.js": "/Hodoal/static/js/453.85d54611.chunk.js",
-    "index.html": "/Hodoal/index.html",
-    "main.d971ff2f.css.map": "/Hodoal/static/css/main.d971ff2f.css.map",
-    "main.b0ae3f6c.js.map": "/Hodoal/static/js/main.b0ae3f6c.js.map",
-    "453.85d54611.chunk.js.map": "/Hodoal/static/js/453.85d54611.chunk.js.map"
+    "main.css": "/simulations-fotoelectric_effect/static/css/main.d971ff2f.css",
+    "main.js": "/simulations-fotoelectric_effect/static/js/main.f9a1499e.js",
+    "static/js/453.85d54611.chunk.js": "/simulations-fotoelectric_effect/static/js/453.85d54611.chunk.js",
+    "index.html": "/simulations-fotoelectric_effect/index.html",
+    "main.d971ff2f.css.map": "/simulations-fotoelectric_effect/static/css/main.d971ff2f.css.map",
+    "main.f9a1499e.js.map": "/simulations-fotoelectric_effect/static/js/main.f9a1499e.js.map",
+    "453.85d54611.chunk.js.map": "/simulations-fotoelectric_effect/static/js/453.85d54611.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.d971ff2f.css",
-    "static/js/main.b0ae3f6c.js"
+    "static/js/main.f9a1499e.js"
   ]
 }
