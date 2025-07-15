@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/simulador-fotoelectrico/static/css/main.d971ff2f.css",
+    "main.js": "/simulador-fotoelectrico/static/js/main.c013e242.js",
+    "static/js/453.85d54611.chunk.js": "/simulador-fotoelectrico/static/js/453.85d54611.chunk.js",
+    "index.html": "/simulador-fotoelectrico/index.html",
+    "main.d971ff2f.css.map": "/simulador-fotoelectrico/static/css/main.d971ff2f.css.map",
+    "main.c013e242.js.map": "/simulador-fotoelectrico/static/js/main.c013e242.js.map",
+    "453.85d54611.chunk.js.map": "/simulador-fotoelectrico/static/js/453.85d54611.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.d971ff2f.css",
+    "static/js/main.c013e242.js"
+  ]
+}
