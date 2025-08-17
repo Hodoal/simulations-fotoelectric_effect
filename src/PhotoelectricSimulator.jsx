@@ -7,11 +7,11 @@ const PhotoelectricSimulator = () => {
   const [intensity, setIntensity] = useState(50); // %
   const [selectedMetal, setSelectedMetal] = useState('Na');
   const [isRunning, setIsRunning] = useState(false);
-  const [electrons, setElectrons] = useState([]);
   const [measurements, setMeasurements] = useState([]);
   const [showGraph, setShowGraph] = useState(false);
   const [photons, setPhotons] = useState([]); // Agregar este nuevo estado
-  
+  const [electrons, setElectrons] = useState([]);
+
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
 
@@ -56,40 +56,44 @@ const PhotoelectricSimulator = () => {
   // Animación de electrones
   useEffect(() => {
     if (!isRunning || !canEmitElectrons) {
-      setElectrons([]);
       return;
     }
 
     const animate = () => {
       setElectrons(prev => {
         let newElectrons = [...prev];
-        
+
         // Agregar nuevos electrones basado en la intensidad
         if (Math.random() < intensity / 1000) {
-          const speed = Math.sqrt(maxKineticEnergy) * 20; // Proporcional a √(Ec)
+          const speed = Math.sqrt(maxKineticEnergy) * 20;
           newElectrons.push({
-            id: Date.now() + Math.random(),
-            x: 300,
+            id: generateId(),
+            x: 230, // Posición del cátodo
             y: 200 + (Math.random() - 0.5) * 60,
             vx: speed * (0.8 + Math.random() * 0.4),
             vy: (Math.random() - 0.5) * speed * 0.3,
             life: 100
           });
         }
-        
+
         // Actualizar posición y eliminar electrones antiguos
         newElectrons = newElectrons
           .map(e => ({
             ...e,
-            x: e.x + e.vx,
+            x: e.x + e.vx, // Mover hacia la derecha
             y: e.y + e.vy,
             life: e.life - 1
           }))
-          .filter(e => e.life > 0 && e.x < 800);
-        
+          .filter(
+            e =>
+              e.life > 0 &&
+              e.x >= 190 && e.x <= 690 && // Limitar horizontalmente al tubo
+              e.y >= 200 && e.y <= 300   // Limitar verticalmente al tubo
+          );
+
         return newElectrons;
       });
-      
+
       animationRef.current = requestAnimationFrame(animate);
     };
     
@@ -101,6 +105,90 @@ const PhotoelectricSimulator = () => {
       }
     };
   }, [isRunning, canEmitElectrons, intensity, maxKineticEnergy]);
+
+  // Estado para electrones emitidos
+const [emittedElectrons, setEmittedElectrons] = useState([]);
+
+// Animación de fotones y emisión de electrones
+useEffect(() => {
+  let animationFrameId;
+
+  if (!isRunning) {
+    setPhotons([]);
+    setEmittedElectrons([]);
+    return;
+  }
+
+  const animate = () => {
+    setPhotons(prevPhotons => {
+      let newPhotons = [...prevPhotons];
+
+      // Agregar nuevos fotones
+      if (Math.random() < intensity / 500) {
+        newPhotons.push({
+          id: generateId(),
+          x: 20,
+          y: 250,
+          speed: 8
+        });
+      }
+
+      // Mover fotones y eliminar los que ya no son visibles
+      newPhotons = newPhotons
+        .map(p => ({
+          ...p,
+          x: p.x + p.speed
+        }))
+        .filter(p => p.x < 230 && p.x > 0); // Elimina los que salen del área
+
+      // Limitar el número máximo de fotones en el array
+      if (newPhotons.length > 100) {
+        newPhotons = newPhotons.slice(newPhotons.length - 100);
+      }
+
+      // Emisión de electrón si el fotón llega al cátodo y la frecuencia es suficiente
+      newPhotons.forEach(p => {
+        if (p.x + p.speed >= 230 && canEmitElectrons) {
+          setEmittedElectrons(prev => [
+            ...prev,
+            {
+              id: generateId(),
+              x: 230,
+              y: 250,
+              speed: 10,
+              life: 100
+            }
+          ]);
+        }
+      });
+
+      return newPhotons;
+    });
+
+    // Mover electrones emitidos en línea recta hacia el ánodo
+    setEmittedElectrons(prevElectrons =>
+      prevElectrons
+        .map(e => ({
+          ...e,
+          x: e.x + e.speed,
+          life: e.life - 1
+        }))
+        .filter(e => e.x < 610 && e.life > 0) // El electrón desaparece al llegar al ánodo
+    );
+
+    animationFrameId = requestAnimationFrame(animate);
+  };
+
+  animationFrameId = requestAnimationFrame(animate);
+
+  return () => {
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+    }
+    setPhotons([]); // Limpia los fotones al detener
+    setEmittedElectrons([]); // Limpia los electrones emitidos al detener
+  };
+}, [isRunning, intensity, canEmitElectrons]);
 
   // Animación de fotones
   useEffect(() => {
@@ -119,7 +207,7 @@ const PhotoelectricSimulator = () => {
         if (Math.random() < intensity / 500) {
           const y = 250; // Posición fija en y para trayectoria recta
           newPhotons.push({
-            id: Date.now() + Math.random(),
+            id: generateId(),
             x: 20,
             y: y,
             speed: 8 + Math.random() * 2
@@ -146,8 +234,8 @@ const PhotoelectricSimulator = () => {
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
       }
-      // Limpiar los fotones cuando el efecto se desmonta
-      setPhotons([]);
+      // No limpies aquí los arrays de estado
+      // setPhotons([]);
     };
   }, [isRunning, intensity]);
 
@@ -197,6 +285,12 @@ const PhotoelectricSimulator = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  // When creating a new electron or photon, generate a stable id:
+const generateId = (() => {
+  let count = 0;
+  return () => ++count;
+})();
 
   return (
     <div className="w-full max-w-7xl mx-auto p-6 bg-gray-50 min-h-screen">
@@ -282,7 +376,8 @@ const PhotoelectricSimulator = () => {
                 onClick={() => {
                   setIsRunning(false);
                   setPhotons([]); // Limpiar los fotones
-                  setElectrons([]); // También limpiamos los electrones por consistencia
+                  setElectrons([]); // Limpiar los electrones
+                  setEmittedElectrons([]); // Limpiar los electrones emitidos
                 }}
                 className="flex items-center gap-2 px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-md"
               >
@@ -313,89 +408,136 @@ const PhotoelectricSimulator = () => {
             <h2 className="text-xl font-semibold mb-4 text-gray-700">Simulación</h2>
             
             <div className="relative bg-black rounded-lg overflow-hidden" style={{ height: '500px' }}>
-              {/* Fuente de luz */}
-              <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
-                <div className="w-8 h-12 bg-yellow-400 rounded-r-lg flex items-center justify-center">
-                  <div className="w-2 h-2 bg-white rounded-full"></div> 
+             
+              
+              {/* Fuente de luz - posición superior derecha */}
+              <div className="absolute" style={{ left: '410px', top: '40px' }}>
+                <div className="w-8 h-12 bg-yellow-400 rounded-lg flex items-center justify-center transform -rotate-45">
+                  <div className="w-1 h-3 bg-white rounded-full"></div> 
                 </div>
               </div>
-              
-              
 
-              {/* Haz de luz */}
+              {/* Haz de luz diagonal - extendido hasta el cátodo */}
               {isRunning && (
                 <div 
-                  className="absolute left-12 top-1/2 transform -translate-y-1/2 h-2 opacity-60"
+                  className="absolute opacity-60 transform -rotate-45 origin-top-right"
                   style={{ 
-                    width: '220px',
+                    left: '110px', // Fuente de luz
+                    top: '40px',
+                    width: `${410 - 90}px`, // Distancia hasta el cátodo
+                    height: '30px',
                     backgroundColor: lightColor,
-                    boxShadow: `0 0 20px ${lightColor}`
+                    boxShadow: `0 0 10px ${lightColor}`
                   }}
                 />
               )}
 
               {/* Fotones */}
-              {isRunning && photons.map(photon => (
-                <div
-                  key={`photon-${photon.id}`}
-                  className="absolute"
-                  style={{
-                    left: `${photon.x}px`,
-                    top: `${photon.y}px`,
-                    transform: 'translate(-50%, -50%)',
-                    color: lightColor,
-                  }}
-                >
-                  <svg 
-                    width="12" 
-                    height="6" 
-                    viewBox="0 0 12 6" 
-                    fill="none" 
+              {isRunning && photons.map(photon => {
+                // Calcular posición diagonal del fotón (desde arriba derecha hacia el cátodo)
+                const diagonalX = 400 - photon.x * Math.cos(Math.PI/4);
+                const diagonalY = 90 + photon.x * Math.sin(Math.PI/4);
+                
+                return (
+                  <div
+                    key={`photon-${photon.id}`}
+                    className="absolute"
                     style={{
-                      filter: `drop-shadow(0 0 4px ${lightColor})`
+                      left: `${diagonalX}px`,
+                      top: `${diagonalY}px`,
+                      transform: 'translate(-50%, -50%) rotate(-45deg)',
+                      color: lightColor,
                     }}
                   >
-                    <path
-                      d="M0 3L8 3L8 5L12 3L8 1L8 3Z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                </div>
-              ))}
+                    <svg 
+                      width="20" 
+                      height="10" 
+                      viewBox="0 0 12 6" 
+                      fill="none" 
+                      style={{
+                        filter: `drop-shadow(0 0 4px ${lightColor})`
+                      }}
+                    >
+                      <path
+                        d="M0 3L8 3L8 5L12 3L8 1L8 3Z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  </div>
+                );
+              })}
+               {/* Tubo de vacío (contorno) */}
+            <div 
+              className="absolute border-4 border-gray-400 rounded-full bg-transparent"
+              style={{ 
+                left: '190px',
+                top: '200px',
+                width: '480px',
+                height: '100px'
+              }}
+            />
 
-              {/* Superficie metálica */}
+              {/* Superficie metálica (cátodo) - posición central izquierda */}
               <div 
-                className="absolute w-4 h-32 top-1/2 transform -translate-y-1/2 rounded-l-lg"
+                className="absolute w-5 h-20 rounded-lg"
                 style={{ 
-                  left: '240px',
+                  left: '230px',
+                  top: '210px',
                   backgroundColor: metals[selectedMetal].color,
                   boxShadow: 'inset 0 0 10px rgba(0,0,0,0.3)'
                 }}
               />
 
               {/* Etiqueta del metal */}
-              <div className="absolute text-white text-xs" style={{ left: '260px', top: '40px' }}>
+              <div className="absolute text-white text-xs" style={{ left: '190px', top: '130px' }}>
                 {metals[selectedMetal].name}
                 <br />
                 φ = {workFunction} eV
               </div>
 
-              {/* Electrones emitidos */}
-              {electrons.map((electron, index) => (
+              {/* Electrones emitidos en línea recta */}
+              {emittedElectrons.map(electron => (
                 <div
-                  key={`electron-${electron.id}-${index}`} // Hacer la key más única
-                  className="absolute w-2 h-2 bg-blue-400 rounded-full"
+                  key={`emitted-electron-${electron.id}`}
+                  className="absolute"
                   style={{
                     left: `${electron.x}px`,
                     top: `${electron.y}px`,
-                    opacity: electron.life / 100,
-                    boxShadow: '0 0 4px #3B82F6'
+                    width: '20px',
+                    height: '20px',
+                    pointerEvents: 'none',
+                    opacity: electron.life / 100
                   }}
-                />
+                >
+                  <svg width="20" height="20">
+                    <circle cx="10" cy="10" r="9" fill="#3B82F6" stroke="#1e40af" strokeWidth="2"/>
+                    <text x="10" y="14" textAnchor="middle" fontSize="16" fill="#fff" fontWeight="bold">−</text>
+                  </svg>
+                </div>
+              ))}
+
+              {/* Electrones fijos en el cátodo */}
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div
+                  key={`cathode-electron-${i}`}
+                  className="absolute"
+                  style={{
+                    left: '230px',
+                    top: `${215 + i * 12}px`,
+                    width: '10px',
+                    height: '10px',
+                    pointerEvents: 'none'
+                  }}
+                >
+                  <svg width="20" height="20">
+                    <circle cx="10" cy="10" r="7" fill="#3B82F6" stroke="#1e40af" strokeWidth="2"/>
+                    <text x="10" y="14" textAnchor="middle" fontSize="16" fill="#fff" fontWeight="bold">−</text>
+                  </svg>
+                </div>
               ))}
 
               {/* Colector/Ánodo */}
-              <div className="absolute right-4 top-1/2 transform -translate-y-1/2 w-4 h-32 bg-gray-600 rounded-r-lg" />
+              <div className="absolute right-10 top-1/2 transform -translate-y-1/2 w-4 h-20 bg-gray-600 rounded-r-lg" />
 
               {/* Voltímetro */}
               <div className="absolute bottom-4 left-4 bg-gray-800 text-white px-3 py-2 rounded text-sm">
