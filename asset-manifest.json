@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/simulations-fotoelectric_effect/static/css/main.981b3875.css",
+    "main.js": "/simulations-fotoelectric_effect/static/js/main.c5e149f1.js",
+    "static/js/453.85d54611.chunk.js": "/simulations-fotoelectric_effect/static/js/453.85d54611.chunk.js",
+    "index.html": "/simulations-fotoelectric_effect/index.html",
+    "main.981b3875.css.map": "/simulations-fotoelectric_effect/static/css/main.981b3875.css.map",
+    "main.c5e149f1.js.map": "/simulations-fotoelectric_effect/static/js/main.c5e149f1.js.map",
+    "453.85d54611.chunk.js.map": "/simulations-fotoelectric_effect/static/js/453.85d54611.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.981b3875.css",
+    "static/js/main.c5e149f1.js"
+  ]
+}
