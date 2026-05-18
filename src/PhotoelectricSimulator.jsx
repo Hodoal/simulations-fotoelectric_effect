@@ -1,5 +1,84 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, Download } from 'lucide-react';
+import { Play, Pause, RotateCcw, Download, Upload } from 'lucide-react';
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const roundFrequencyStep = (v) => Math.round(v * 10) / 10;
+
+/** Texto claro u oscuro según luminancia relativa WCAG del fondo (#RGB / #RRGGBB) */
+const getReadableTextColor = (hex) => {
+  if (!hex || typeof hex !== 'string') return '#111827';
+  let h = hex.trim().replace('#', '');
+  if (h.length === 3) {
+    h = h
+      .split('')
+      .map((c) => c + c)
+      .join('');
+  }
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return '#111827';
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  const lin = (c) =>
+    c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  return L > 0.55 ? '#111827' : '#FFFFFF';
+};
+
+/** Parsea CSV exportado por esta app (compat. con decimales tipo 6.5e14) → filas medición */
+const parseMeasurementsCsv = (rawText) => {
+  const text = rawText.replace(/^\uFEFF/, '').trim();
+  if (!text) throw new Error('El archivo está vacío.');
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) throw new Error('No hay filas de datos además del encabezado.');
+
+  const parseFreq = (cell) => {
+    const s = String(cell).trim().toLowerCase().replace(/\s/g, '');
+    if (s.includes('e14')) {
+      return parseFloat(s.replace(/e14.*$/i, ''));
+    }
+    const n = parseFloat(s);
+    return Number.isNaN(n) ? NaN : n;
+  };
+
+  const rows = [];
+  for (let idx = 1; idx < lines.length; idx++) {
+    const parts = lines[idx].split(',');
+    if (parts.length < 7) continue;
+    const freq = parseFreq(parts[0]);
+    if (Number.isNaN(freq)) continue;
+    const metalSym = String(parts[5]).trim();
+    const emitsStr = String(parts[6]).trim().toLowerCase();
+    const emitsElectrons =
+      emitsStr === 'true' || emitsStr === '1' || emitsStr === 'sí' || emitsStr === 'si';
+
+    rows.push({
+      id: `import-${Date.now()}-${idx}`,
+      frequency: roundFrequencyStep(clamp(freq, FREQ_MIN, FREQ_MAX)),
+      wavelength: String(parts[1]).trim(),
+      photonEnergy: String(parts[2]).trim(),
+      kineticEnergy: String(parts[3]).trim(),
+      stoppingVoltage: String(parts[4]).trim(),
+      metal: metalSym,
+      emitsElectrons,
+    });
+  }
+
+  if (rows.length === 0) throw new Error('No se pudo interpretar ninguna fila válida.');
+  return rows;
+};
+
+const FREQ_MIN = 3;
+const FREQ_MAX = 12;
+const INT_MIN = 10;
+const INT_MAX = 100;
+
+/** Posición del tubo en la escena y ánodo alineado al extremo derecho del PNG */
+const SIM_TUBE_LEFT = 140;
+const SIM_TUBE_WIDTH = 520;
+const SIM_ANODE_WIDTH = 16;
+const SIM_ANODE_LEFT =
+  SIM_TUBE_LEFT + SIM_TUBE_WIDTH - SIM_ANODE_WIDTH - 74;
+const SIM_ELECTRON_ABSORB_X = SIM_ANODE_LEFT - 12;
 
 const PhotoelectricSimulator = () => {
   // Estados principales
@@ -14,6 +93,7 @@ const PhotoelectricSimulator = () => {
 
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
+  const importCsvInputRef = useRef(null);
 
   // Propiedades de los metales (función trabajo en eV)
   const metals = {
@@ -53,6 +133,82 @@ const PhotoelectricSimulator = () => {
 
   const lightColor = getWavelengthColor(wavelength);
 
+  const addExperimentalNoise = (value) => {
+    const noise = value * (1 + (Math.random() - 0.5) * 0.04);
+    return Math.max(0, noise);
+  };
+
+  const buildMeasurementSnapshot = (fX1e14Hz, metalKey, measurementId) => {
+    const fRounded = roundFrequencyStep(clamp(fX1e14Hz, FREQ_MIN, FREQ_MAX));
+    const wf = metals[metalKey].workFunction;
+    const photonE = h * fRounded * 1e14;
+    const maxEcRaw = Math.max(0, photonE - wf);
+    const wl = (c / (fRounded * 1e14)) * 1e9;
+    const kineticEnergyMeas = addExperimentalNoise(maxEcRaw);
+    const photonEnergyMeas = addExperimentalNoise(photonE);
+    return {
+      id: measurementId ?? `${Date.now()}-${Math.random()}`,
+      frequency: fRounded,
+      wavelength: wl.toFixed(1),
+      photonEnergy: photonEnergyMeas.toFixed(3),
+      kineticEnergy: kineticEnergyMeas.toFixed(3),
+      stoppingVoltage: kineticEnergyMeas.toFixed(3),
+      metal: metalKey,
+      emitsElectrons: photonE > wf,
+    };
+  };
+
+  const enumerateSweepFrequencies = () => {
+    const freqs = [];
+    for (
+      let k = Math.round(FREQ_MIN * 10);
+      k <= Math.round(FREQ_MAX * 10);
+      k += 1
+    ) {
+      freqs.push(roundFrequencyStep(k / 10));
+    }
+    return freqs;
+  };
+
+  const runFrequencySweep = () => {
+    if (measurements.length > 0) {
+      const ok = window.confirm(
+        'Se reemplazarán las mediciones actuales. ¿Continuar?'
+      );
+      if (!ok) return;
+    }
+    const baseTs = Date.now();
+    const freqs = enumerateSweepFrequencies();
+    const rows = freqs.map((f, i) =>
+      buildMeasurementSnapshot(f, selectedMetal, `sweep-${baseTs}-${i}-${Math.random()}`)
+    );
+    setMeasurements(rows);
+    setFrequency(FREQ_MAX);
+  };
+
+  const handleFrequencyInputChange = (e) => {
+    const raw = parseFloat(e.target.value);
+    if (Number.isNaN(raw)) return;
+    setFrequency(roundFrequencyStep(clamp(raw, FREQ_MIN, FREQ_MAX)));
+  };
+
+  const handleFrequencyBlur = () => {
+    setFrequency(roundFrequencyStep(clamp(frequency, FREQ_MIN, FREQ_MAX)));
+  };
+
+  const handleIntensityInputChange = (e) => {
+    const raw = parseInt(e.target.value, 10);
+    if (Number.isNaN(raw)) return;
+    setIntensity(Math.round(clamp(raw, INT_MIN, INT_MAX)));
+  };
+
+  const handleIntensityBlur = () => {
+    setIntensity(Math.round(clamp(intensity, INT_MIN, INT_MAX)));
+  };
+
+  const numberInputBaseClass =
+    'w-24 shrink-0 px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500';
+
   // Animación de electrones
   useEffect(() => {
     if (!isRunning || !canEmitElectrons) {
@@ -87,7 +243,8 @@ const PhotoelectricSimulator = () => {
           .filter(
             e =>
               e.life > 0 &&
-              e.x >= 190 && e.x <= 690 && // Limitar horizontalmente al tubo
+              e.x >= 190 &&
+              e.x <= SIM_TUBE_LEFT + SIM_TUBE_WIDTH + 20 && // Tubo + margen
               e.y >= 200 && e.y <= 300   // Limitar verticalmente al tubo
           );
 
@@ -173,7 +330,7 @@ useEffect(() => {
           x: e.x + e.speed,
           life: e.life - 1
         }))
-        .filter(e => e.x < 610 && e.life > 0) // El electrón desaparece al llegar al ánodo
+        .filter(e => e.x < SIM_ELECTRON_ABSORB_X && e.life > 0) // Hasta el colector junto al tubo
     );
 
     animationFrameId = requestAnimationFrame(animate);
@@ -239,29 +396,9 @@ useEffect(() => {
     };
   }, [isRunning, intensity]);
 
-  // Registrar medición
   const recordMeasurement = () => {
-    // Agregar ruido aleatorio (±2% de variación)
-    const addNoise = (value) => {
-      const noise = value * (1 + (Math.random() - 0.5) * 0.04);
-      return Math.max(0, noise);
-    };
-
-    const kineticEnergy = addNoise(maxKineticEnergy);
-    const photonEnergyWithNoise = addNoise(photonEnergy);
-    const timestamp = Date.now();
-
-    const newMeasurement = {
-      id: `${timestamp}-${Math.random()}`, // Agregar un ID único
-      frequency: frequency,
-      wavelength: wavelength.toFixed(1),
-      photonEnergy: photonEnergyWithNoise.toFixed(3),
-      kineticEnergy: kineticEnergy.toFixed(3),
-      stoppingVoltage: kineticEnergy.toFixed(3),
-      metal: selectedMetal,
-      emitsElectrons: canEmitElectrons
-    };
-    setMeasurements(prev => [...prev, newMeasurement]);
+    const row = buildMeasurementSnapshot(frequency, selectedMetal);
+    setMeasurements((prev) => [...prev, row]);
   };
 
   // Limpiar mediciones
@@ -286,6 +423,41 @@ useEffect(() => {
     document.body.removeChild(link);
   };
 
+  const handleImportCsvClick = () => {
+    importCsvInputRef.current?.click();
+  };
+
+  const handleImportCsvChange = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (measurements.length > 0) {
+      const ok = window.confirm(
+        'Las mediciones actuales se reemplazarán por las del archivo. ¿Continuar?'
+      );
+      if (!ok) return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const rows = parseMeasurementsCsv(String(reader.result));
+        setMeasurements(rows);
+        const first = rows[0]?.metal;
+        if (first && metals[first]) {
+          setSelectedMetal(first);
+        }
+      } catch (err) {
+        window.alert(
+          err instanceof Error ? err.message : 'No se pudieron cargar los datos.'
+        );
+      }
+    };
+    reader.onerror = () => window.alert('No se pudo leer el archivo.');
+    reader.readAsText(file, 'UTF-8');
+  };
+
   // When creating a new electron or photon, generate a stable id:
 const generateId = (() => {
   let count = 0;
@@ -308,17 +480,33 @@ const generateId = (() => {
             
             {/* Frecuencia */}
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-600 mb-2">
-                Frecuencia: {frequency.toFixed(1)} × 10¹⁴ Hz
-              </label>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-2 text-sm font-medium text-gray-600">
+                <span>Frecuencia:</span>
+                <input
+                  id="frequency-input"
+                  type="number"
+                  min={FREQ_MIN}
+                  max={FREQ_MAX}
+                  step="0.1"
+                  value={frequency}
+                  onChange={handleFrequencyInputChange}
+                  onBlur={handleFrequencyBlur}
+                  className={numberInputBaseClass}
+                  aria-label="Frecuencia en ×10¹⁴ Hz"
+                />
+                <span>× 10¹⁴ Hz</span>
+              </div>
               <input
                 type="range"
-                min="3"
-                max="12"
+                min={FREQ_MIN}
+                max={FREQ_MAX}
                 step="0.1"
                 value={frequency}
-                onChange={(e) => setFrequency(parseFloat(e.target.value))}
+                onChange={(e) =>
+                  setFrequency(roundFrequencyStep(parseFloat(e.target.value)))
+                }
                 className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                aria-label="Frecuencia (deslizador)"
               />
               <div className="flex justify-between text-xs text-gray-500 mt-1">
                 <span>IR</span>
@@ -329,17 +517,31 @@ const generateId = (() => {
 
             {/* Intensidad */}
             <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-600 mb-2">
-                Intensidad: {intensity}%
-              </label>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-2 text-sm font-medium text-gray-600">
+                <span>Intensidad:</span>
+                <input
+                  id="intensity-input"
+                  type="number"
+                  min={INT_MIN}
+                  max={INT_MAX}
+                  step="1"
+                  value={intensity}
+                  onChange={handleIntensityInputChange}
+                  onBlur={handleIntensityBlur}
+                  className={numberInputBaseClass}
+                  aria-label="Intensidad en porcentaje"
+                />
+                <span>%</span>
+              </div>
               <input
                 type="range"
-                min="10"
-                max="100"
-                step="5"
+                min={INT_MIN}
+                max={INT_MAX}
+                step="1"
                 value={intensity}
-                onChange={(e) => setIntensity(parseInt(e.target.value))}
+                onChange={(e) => setIntensity(parseInt(e.target.value, 10))}
                 className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                aria-label="Intensidad (deslizador)"
               />
             </div>
 
@@ -351,7 +553,11 @@ const generateId = (() => {
               <select
                 value={selectedMetal}
                 onChange={(e) => setSelectedMetal(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 rounded-md border transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 focus:ring-offset-gray-50 border-black/15"
+                style={{
+                  backgroundColor: metals[selectedMetal].color,
+                  color: getReadableTextColor(metals[selectedMetal].color),
+                }}
               >
                 {Object.entries(metals).map(([symbol, metal]) => (
                   <option key={symbol} value={symbol}>
@@ -410,21 +616,31 @@ const generateId = (() => {
             <div className="relative bg-black rounded-lg overflow-hidden" style={{ height: '500px' }}>
              
               
-              {/* Fuente de luz - posición superior derecha */}
-              <div className="absolute" style={{ left: '410px', top: '40px' }}>
-                <div className="w-8 h-12 bg-yellow-400 rounded-lg flex items-center justify-center transform -rotate-45">
-                  <div className="w-1 h-3 bg-white rounded-full"></div> 
-                </div>
+              {/* Fuente láser: boquilla alineada con el origen del haz (esquina TR del rectángulo) */}
+              <div
+                className="absolute pointer-events-none select-none z-[26]"
+                style={{ left: '430px', top: '20px' }}
+              >
+                <img
+                  src={`${process.env.PUBLIC_URL || ''}/laser.png`}
+                  alt="Fuente láser"
+                  className="block max-h-[5rem] w-auto object-contain"
+                  style={{
+                    transform: 'translateX(-100%) rotate(135deg)',
+                    transformOrigin: 'right center',
+                  }}
+                  draggable={false}
+                />
               </div>
 
               {/* Haz de luz diagonal - extendido hasta el cátodo */}
               {isRunning && (
                 <div 
-                  className="absolute opacity-60 transform -rotate-45 origin-top-right"
+                  className="absolute z-[22] opacity-70 transform -rotate-45 origin-top-right pointer-events-none"
                   style={{ 
-                    left: '110px', // Fuente de luz
+                    left: '110px',
                     top: '40px',
-                    width: `${410 - 90}px`, // Distancia hasta el cátodo
+                    width: `${410 - 90}px`,
                     height: '30px',
                     backgroundColor: lightColor,
                     boxShadow: `0 0 10px ${lightColor}`
@@ -441,7 +657,7 @@ const generateId = (() => {
                 return (
                   <div
                     key={`photon-${photon.id}`}
-                    className="absolute"
+                    className="absolute z-[23] pointer-events-none"
                     style={{
                       left: `${diagonalX}px`,
                       top: `${diagonalY}px`,
@@ -466,20 +682,23 @@ const generateId = (() => {
                   </div>
                 );
               })}
-               {/* Tubo de vacío (contorno) */}
-            <div 
-              className="absolute border-4 border-gray-400 rounded-full bg-transparent"
-              style={{ 
-                left: '190px',
-                top: '200px',
-                width: '480px',
-                height: '100px'
-              }}
-            />
+              {/* Tubo de vacío (imagen) */}
+              <img
+                src={`${process.env.PUBLIC_URL || ''}/tubovacio.png`}
+                alt="Tubo de vacío"
+                className="absolute pointer-events-none select-none object-contain z-[10]"
+                style={{
+                  left: `${SIM_TUBE_LEFT}px`,
+                  top: '195px',
+                  width: `${SIM_TUBE_WIDTH}px`,
+                  height: '112px',
+                }}
+                draggable={false}
+              />
 
               {/* Superficie metálica (cátodo) - posición central izquierda */}
               <div 
-                className="absolute w-5 h-20 rounded-lg"
+                className="absolute z-[14] w-5 h-20 rounded-lg opacity-20"
                 style={{ 
                   left: '230px',
                   top: '210px',
@@ -489,7 +708,7 @@ const generateId = (() => {
               />
 
               {/* Etiqueta del metal */}
-              <div className="absolute text-white text-xs" style={{ left: '190px', top: '130px' }}>
+              <div className="absolute z-[24] text-white text-xs" style={{ left: '190px', top: '130px' }}>
                 {metals[selectedMetal].name}
                 <br />
                 φ = {workFunction} eV
@@ -499,7 +718,7 @@ const generateId = (() => {
               {emittedElectrons.map(electron => (
                 <div
                   key={`emitted-electron-${electron.id}`}
-                  className="absolute"
+                  className="absolute z-[28]"
                   style={{
                     left: `${electron.x}px`,
                     top: `${electron.y}px`,
@@ -520,7 +739,7 @@ const generateId = (() => {
               {Array.from({ length: 5 }).map((_, i) => (
                 <div
                   key={`cathode-electron-${i}`}
-                  className="absolute"
+                  className="absolute z-[14]"
                   style={{
                     left: '230px',
                     top: `${215 + i * 12}px`,
@@ -536,52 +755,90 @@ const generateId = (() => {
                 </div>
               ))}
 
-              {/* Colector/Ánodo */}
-              <div className="absolute right-10 top-1/2 transform -translate-y-1/2 w-4 h-20 bg-gray-600 rounded-r-lg" />
+              {/* Colector/Ánodo — alineado al extremo derecho del tubo (png) */}
+              <div
+                className="absolute top-1/2 z-[14] -translate-y-1/2 bg-gray-600 rounded-r-lg opacity-20"
+                style={{
+                  left: `${SIM_ANODE_LEFT}px`,
+                  width: `${SIM_ANODE_WIDTH}px`,
+                  height: '80px',
+                }}
+              />
 
               {/* Voltímetro */}
-              <div className="absolute bottom-4 left-4 bg-gray-800 text-white px-3 py-2 rounded text-sm">
+              <div className="absolute bottom-4 left-4 z-[40] bg-gray-800 text-white px-3 py-2 rounded text-sm">
                 <div>V = {stoppingVoltage.toFixed(3)} V</div>
                 <div>Ec = {maxKineticEnergy.toFixed(3)} eV</div>
               </div>
 
               {/* Indicador de emisión */}
-              <div className="absolute top-4 right-4">
+              <div className="absolute top-4 right-4 z-[40]">
                 <div className={`w-4 h-4 rounded-full ${canEmitElectrons ? 'bg-green-500' : 'bg-red-500'}`} />
                 <div className="text-white text-xs mt-1">
                   {canEmitElectrons ? 'Emitiendo' : 'Sin emisión'}
                 </div>
               </div>
             </div>
-          </div>{/* Botón para registrar medición */}
-            <button
-              onClick={recordMeasurement}
-              className="w-full mt-4 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md font-medium"
-            >
-              Registrar Medición
-            </button>
+            <div className="flex flex-col gap-2 mt-4">
+              <button
+                type="button"
+                onClick={recordMeasurement}
+                className="w-full px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-md font-medium"
+              >
+                Registrar Medición
+              </button>
+              <button
+                type="button"
+                onClick={runFrequencySweep}
+                className="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-md font-medium text-sm"
+              >
+                Barrido automático ({FREQ_MIN}–{FREQ_MAX} ×10¹⁴ Hz, paso 0.1)
+              </button>
+            </div>
           </div>
+        </div>
 
 
         {/* Panel de Mediciones */}
         <div className="bg-white rounded-lg shadow-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-xl font-semibold text-gray-700">Mediciones</h2>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={importCsvInputRef}
+                type="file"
+                accept=".csv,text/csv,text/plain"
+                className="hidden"
+                onChange={handleImportCsvChange}
+              />
               <button
+                type="button"
                 onClick={() => setShowGraph(!showGraph)}
                 className="px-3 py-1 bg-purple-500 hover:bg-purple-600 text-white rounded text-sm"
               >
                 {showGraph ? 'Tabla' : 'Gráfica'}
               </button>
               <button
+                type="button"
                 onClick={exportData}
-                className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white rounded text-sm"
+                className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white rounded text-sm disabled:opacity-50"
                 disabled={measurements.length === 0}
+                title="Descargar mediciones como CSV"
+                aria-label="Descargar mediciones como CSV"
               >
-                <Download size={14} />
+                <Download size={14} aria-hidden />
               </button>
               <button
+                type="button"
+                onClick={handleImportCsvClick}
+                className="px-3 py-1 bg-slate-600 hover:bg-slate-700 text-white rounded text-sm"
+                title="Cargar CSV (mismo formato que la exportación de esta aplicación)"
+                aria-label="Cargar mediciones desde archivo CSV"
+              >
+                <Upload size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
                 onClick={clearMeasurements}
                 className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-sm"
               >
